@@ -7,6 +7,16 @@ from pathlib import Path
 from app.core.config import COMPILE_TIMEOUT_SECONDS, COMPILER_BINARY
 from app.schemas.compile import CompileDiagnostic, CompileResponse
 
+# GCC only recognizes "-std=c23" starting at GCC 14; Debian 12 "bookworm"
+# (Render's native Python runtime, and most current Debian-based images)
+# ships GCC 12, which only understands the pre-finalization alias "c2x" for
+# the same standard. c2x is accepted by both older and newer GCC/clang, so
+# it's the safer flag to actually pass regardless of what the API/UI calls
+# it. Every other standard name here is a stable, universally-recognized
+# flag on both compilers.
+_STD_FLAG_OVERRIDES = {"c23": "c2x"}
+
+
 DIAGNOSTIC_PATTERN = re.compile(
     r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<column>\d+):\s*"
     r"(?P<severity>error|warning):\s*(?P<message>.*)$",
@@ -51,13 +61,15 @@ def compile_in_workspace(workspace: Path, source_code: str, c_standard: str) -> 
     source_path.write_text(source_code)
     binary_path = workspace / "program"
 
+    std_flag = _STD_FLAG_OVERRIDES.get(c_standard, c_standard)
+
     try:
         # Relative filenames (with cwd=workspace) keep the server's
         # temp-directory path out of diagnostics shown to the client.
         result = subprocess.run(
             [
                 COMPILER_BINARY,
-                f"-std={c_standard}",
+                f"-std={std_flag}",
                 "-Wall",
                 "-Wextra",
                 "main.c",

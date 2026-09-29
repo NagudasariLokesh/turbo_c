@@ -1,6 +1,12 @@
 import os
 
-COMPILER_BINARY = "clang"
+# Render's native (non-Docker) Python runtime ships gcc/g++ pre-installed
+# (Debian 12 "bookworm") but has no way to install additional packages like
+# clang -- see sandbox/README.md for the Docker-based alternative, which
+# does install clang, if you switch back to that deployment path. Override
+# via env var for any environment that has a different compiler on PATH
+# (e.g. this dev machine only has clang, not gcc).
+COMPILER_BINARY = os.environ.get("COMPILER_BINARY", "gcc")
 COMPILE_TIMEOUT_SECONDS = 10
 MAX_SOURCE_BYTES = 200_000
 CORS_ORIGINS = [

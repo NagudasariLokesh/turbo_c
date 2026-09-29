@@ -18,10 +18,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 RUN useradd --create-home --shell /usr/sbin/nologin nextjs
 
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+# No `output: standalone` build (see next.config.ts) -- `next start` needs
+# the full node_modules tree, not the trimmed standalone server bundle.
+COPY --from=builder /app/package.json /app/package-lock.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 
 USER nextjs
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["npm", "start"]

@@ -1,20 +1,23 @@
 # Render Blueprint -- deploy via the Render dashboard: New > Blueprint,
-# point it at this repo. Render reads this file and creates both services
-# with the correct Dockerfile paths, which is the thing that failed when
-# creating a Web Service manually (Render looks for a Dockerfile at the
-# repo root by default; ours are in subdirectories).
+# point it at this repo. Render reads this file and creates both services.
 #
-# After the first deploy, open each service's Settings > Environment and
-# double check the URLs below match the actual *.onrender.com hostnames
-# Render assigned (they usually match the `name` fields exactly, but
-# confirm rather than assume).
+# Uses Render's NATIVE runtimes (no Docker). The backend needs a C
+# compiler; Render's native Python runtime ships gcc/g++ pre-installed
+# (Debian 12 "bookworm") but has no way to install additional packages, so
+# this only works with gcc, not clang (see backend/app/core/config.py).
+# A Docker-based alternative still exists (sandbox/Dockerfile,
+# frontend/Dockerfile, and the docker-compose.yml at the repo root) if you
+# need clang specifically or want the sandbox isolation notes in
+# sandbox/README.md -- switch each service's `runtime` back to `docker`
+# and restore the `dockerfilePath`/`dockerContext` fields to use it.
 
 services:
   - type: web
     name: turbo-c-ide-backend
-    runtime: docker
-    dockerfilePath: ./sandbox/Dockerfile
-    dockerContext: .
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     plan: free
     healthCheckPath: /api/health
     envVars:
@@ -23,13 +26,11 @@ services:
 
   - type: web
     name: turbo-c-ide-frontend
-    runtime: docker
-    dockerfilePath: ./frontend/Dockerfile
-    dockerContext: ./frontend
+    runtime: node
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
     plan: free
-    # NEXT_PUBLIC_API_BASE_URL is NOT set here -- Render's Blueprint YAML
-    # has no way to pass Docker build arguments, and NEXT_PUBLIC_* vars
-    # must be present at build time, not just runtime, so a plain envVar
-    # here would be silently ignored by the Next.js build. It's hardcoded
-    # directly in frontend/Dockerfile instead. If you rename the backend
-    # service, update it there (and this comment is your reminder why).
+    envVars:
+      - key: NEXT_PUBLIC_API_BASE_URL
+        value: https://turbo-c-ide-backend.onrender.com
