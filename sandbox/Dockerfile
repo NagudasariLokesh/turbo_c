@@ -17,4 +17,7 @@ COPY backend/app ./app
 USER sandboxrunner
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Render (and most PaaS Docker hosts) inject a PORT env var and require the
+# container to bind to it -- exec-form CMD can't expand env vars, so this
+# needs shell form. Falls back to 8000 for plain `docker run` locally.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
