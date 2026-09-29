@@ -1,0 +1,43 @@
+# Production-shaped compose file matching the spec's architecture
+# (Nginx -> Next.js / FastAPI). NOT run or tested from this dev environment
+# -- no Docker daemon is available here (see sandbox/README.md for the same
+# caveat on the compiler sandbox itself). Treat this as a reviewed starting
+# point for a real deployment, not a verified one.
+#
+# No database: files are saved directly to the user's own machine via the
+# browser's File System Access API (see frontend/src/lib/localFiles.ts), so
+# there's nothing server-side left to persist.
+#
+# The `backend` service here runs the FastAPI app directly for simplicity;
+# it does NOT include the per-request container sandboxing described in
+# sandbox/README.md (network isolation, read-only rootfs, pids-limit, etc).
+# Add that before accepting untrusted public traffic.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    restart: unless-stopped
+    environment:
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
