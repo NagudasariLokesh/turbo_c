@@ -1,10 +1,13 @@
 FROM node:22-slim AS builder
 WORKDIR /app
 # NEXT_PUBLIC_* vars are baked into the client bundle at build time, not
-# read at container startup -- so this has to be a build ARG passed to
-# `docker build`, not just a runtime environment variable on the container.
-ARG NEXT_PUBLIC_API_BASE_URL
-ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+# read at container startup. Render's Blueprint YAML has no way to pass
+# Docker build arguments (confirmed against Render's own docs -- no
+# --build-arg equivalent exists), so a runtime envVar in render.yaml can't
+# reach this step. Hardcoded here instead, since the backend's URL is
+# already fixed by its `name:` in render.yaml and known ahead of time.
+# If you rename the backend service, update this to match.
+ENV NEXT_PUBLIC_API_BASE_URL=https://turbo-c-ide-backend.onrender.com
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .

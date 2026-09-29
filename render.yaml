@@ -27,8 +27,9 @@ services:
     dockerfilePath: ./frontend/Dockerfile
     dockerContext: ./frontend
     plan: free
-    dockerBuildArgs:
-      NEXT_PUBLIC_API_BASE_URL: https://turbo-c-ide-backend.onrender.com
-    envVars:
-      - key: NEXT_PUBLIC_API_BASE_URL
-        value: https://turbo-c-ide-backend.onrender.com
+    # NEXT_PUBLIC_API_BASE_URL is NOT set here -- Render's Blueprint YAML
+    # has no way to pass Docker build arguments, and NEXT_PUBLIC_* vars
+    # must be present at build time, not just runtime, so a plain envVar
+    # here would be silently ignored by the Next.js build. It's hardcoded
+    # directly in frontend/Dockerfile instead. If you rename the backend
+    # service, update it there (and this comment is your reminder why).
