@@ -19,8 +19,6 @@ services:
       context: .
       dockerfile: sandbox/Dockerfile
     restart: unless-stopped
-    environment:
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
 
   frontend:
     build:

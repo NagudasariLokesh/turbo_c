@@ -9,11 +9,6 @@ import os
 COMPILER_BINARY = os.environ.get("COMPILER_BINARY", "gcc")
 COMPILE_TIMEOUT_SECONDS = 10
 MAX_SOURCE_BYTES = 200_000
-CORS_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
-    if origin.strip()
-]
 
 # Execution limits. These are enforced via POSIX rlimits on the child
 # process -- the best isolation available without Docker/root in this
