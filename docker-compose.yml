@@ -1,8 +1,12 @@
-# Production-shaped compose file matching the spec's architecture
-# (Nginx -> Next.js / FastAPI). NOT run or tested from this dev environment
-# -- no Docker daemon is available here (see sandbox/README.md for the same
-# caveat on the compiler sandbox itself). Treat this as a reviewed starting
-# point for a real deployment, not a verified one.
+# Two-container compose file: `frontend` is an nginx image serving the
+# Next.js static export and proxying /api to `backend` (same origin, no
+# CORS needed) -- see frontend/Dockerfile and frontend/nginx.conf. Mirrors
+# the same-origin design of the actual live deployment, a single Render
+# web service (see README.md), just split across two containers instead
+# of one process. NOT run or tested from this dev environment -- no
+# Docker daemon is available here (see sandbox/README.md for the same
+# caveat on the compiler sandbox itself). Treat this as a reviewed
+# starting point for a real deployment, not a verified one.
 #
 # No database: files are saved directly to the user's own machine via the
 # browser's File System Access API (see frontend/src/lib/localFiles.ts), so
@@ -19,23 +23,19 @@ services:
       context: .
       dockerfile: sandbox/Dockerfile
     restart: unless-stopped
+    environment:
+      # sandbox/Dockerfile only installs clang, not gcc (the app's default
+      # since the Render native-runtime switch) -- without this, every
+      # compile would fail with "gcc: not found".
+      COMPILER_BINARY: clang
 
   frontend:
     build:
       context: ./frontend
-    restart: unless-stopped
-    environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
-    depends_on:
-      - backend
-
-  nginx:
-    image: nginx:1.27-alpine
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
     restart: unless-stopped
     ports:
       - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - frontend
       - backend
