@@ -16,6 +16,15 @@ from app.schemas.compile import CompileDiagnostic, CompileResponse
 # flag on both compilers.
 _STD_FLAG_OVERRIDES = {"c23": "c2x"}
 
+# Turbo C's own runtime always linked clrscr()/getch() in regardless of
+# whether the student's code included conio.h -- no real conio.h exists on
+# Linux, so every compile force-includes our shim (-include) to match that
+# behavior, and also adds its directory to the include search path (-I) so
+# an explicit `#include <conio.h>` in the student's own code still resolves
+# instead of failing with "No such file or directory".
+_COMPAT_INCLUDE_DIR = Path(__file__).resolve().parent.parent / "compat_include"
+_COMPAT_CONIO_HEADER = _COMPAT_INCLUDE_DIR / "conio.h"
+
 
 DIAGNOSTIC_PATTERN = re.compile(
     r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<column>\d+):\s*"
@@ -72,6 +81,10 @@ def compile_in_workspace(workspace: Path, source_code: str, c_standard: str) -> 
                 f"-std={std_flag}",
                 "-Wall",
                 "-Wextra",
+                "-I",
+                str(_COMPAT_INCLUDE_DIR),
+                "-include",
+                str(_COMPAT_CONIO_HEADER),
                 "main.c",
                 "-o",
                 "program",
