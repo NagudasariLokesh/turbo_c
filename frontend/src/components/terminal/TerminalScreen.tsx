@@ -14,7 +14,8 @@ interface TerminalScreenProps {
   onCompileError: (
     errors: CompileDiagnostic[],
     warnings: CompileDiagnostic[],
-    compilerOutput: string
+    compilerOutput: string,
+    filename: string
   ) => void;
   onExit?: (exitCode: number | null) => void;
 }
@@ -101,7 +102,7 @@ export default function TerminalScreen({
           setStatus("Running -- output below is live.");
         } else if (data.type === "compile_error") {
           setStatus("Compilation error.");
-          onCompileErrorRef.current(data.errors, data.warnings, data.compiler_output);
+          onCompileErrorRef.current(data.errors, data.warnings, data.compiler_output, filename);
           onCloseRef.current();
         } else if (data.type === "exit") {
           phaseRef.current = "exited";

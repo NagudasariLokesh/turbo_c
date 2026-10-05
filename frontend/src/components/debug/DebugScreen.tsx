@@ -30,7 +30,8 @@ interface DebugScreenProps {
   onCompileError: (
     errors: CompileDiagnostic[],
     warnings: CompileDiagnostic[],
-    compilerOutput: string
+    compilerOutput: string,
+    filename: string
   ) => void;
   onStopped: (line: number | null) => void;
   onPhaseChange: (phase: Phase) => void;
@@ -146,7 +147,7 @@ const DebugScreen = forwardRef<DebugScreenHandle, DebugScreenProps>(function Deb
           setStatus("Running -- output below is live.");
         } else if (data.type === "compile_error") {
           setStatus("Compilation error.");
-          onCompileErrorRef.current(data.errors, data.warnings, data.compiler_output);
+          onCompileErrorRef.current(data.errors, data.warnings, data.compiler_output, filename);
           onCloseRef.current();
         } else if (data.type === "stopped") {
           setPhaseBoth("stopped");

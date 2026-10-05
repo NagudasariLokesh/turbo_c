@@ -11,7 +11,7 @@ import TerminalScreen from "@/components/terminal/TerminalScreen";
 import DebugScreen, { DebugScreenHandle } from "@/components/debug/DebugScreen";
 import { MENUS } from "@/components/menu/menuData";
 import { Menu, RunStatus } from "@/types/ide";
-import { compileSource, CompileDiagnostic, CStandard } from "@/lib/api";
+import { compileSource, formatCompileResult, CompileDiagnostic, CStandard } from "@/lib/api";
 import { pickAndOpenFile, pickAndSaveFile, saveToHandle } from "@/lib/localFiles";
 
 const DEFAULT_SOURCE = `#include <stdio.h>
@@ -117,22 +117,8 @@ export default function Home() {
       const result = await compileSource(activeTab.content, cStandard, activeTab.filename);
       setErrors(result.errors);
       setWarnings(result.warnings);
-
-      const lines: string[] = [];
-      if (result.success) {
-        lines.push("COMPILATION SUCCESSFUL", "", `${activeTab.filename} compiled successfully.`);
-        setStatus("done");
-      } else {
-        lines.push("COMPILATION ERROR", "");
-        setStatus("error");
-      }
-      if (result.compiler_output.trim()) {
-        lines.push("", result.compiler_output.trim());
-      }
-      if (result.warnings.length > 0 && result.success) {
-        lines.push("", `${result.warnings.length} warning(s).`);
-      }
-      setOutputLines(lines);
+      setStatus(result.success ? "done" : "error");
+      setOutputLines(formatCompileResult(activeTab.filename, result));
     } catch (err) {
       setStatus("error");
       setOutputLines([
@@ -194,16 +180,19 @@ export default function Home() {
   }, []);
 
   const handleTerminalCompileError = useCallback(
-    (errs: CompileDiagnostic[], warns: CompileDiagnostic[], compilerOutput: string) => {
+    (errs: CompileDiagnostic[], warns: CompileDiagnostic[], compilerOutput: string, filename: string) => {
       setErrors(errs);
       setWarnings(warns);
       setStatus("error");
       setOutputLines([
-        "COMPILATION ERROR",
+        ...formatCompileResult(filename, {
+          success: false,
+          errors: errs,
+          warnings: warns,
+          compiler_output: compilerOutput,
+        }),
         "",
         "Program cannot run because it did not compile.",
-        "",
-        compilerOutput.trim(),
       ]);
     },
     []
