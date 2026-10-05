@@ -153,7 +153,14 @@ class GdbSession:
                 continue
 
     async def run(self) -> None:
-        await self._send("-exec-run")
+        # --start sets a temporary breakpoint at main() (auto-deletes after
+        # firing once -- confirmed via MI: disp="del") and runs to it, so a
+        # session with zero breakpoints still pauses at the first line
+        # instead of just running to completion. This matches Turbo C's own
+        # F7/F8: pressing either with nothing running starts the program and
+        # stops at the first line, ready to step, rather than requiring a
+        # breakpoint to ever pause at all.
+        await self._send("-exec-run --start")
 
     async def cont(self) -> None:
         await self._send("-exec-continue")
