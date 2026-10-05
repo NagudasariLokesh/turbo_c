@@ -59,6 +59,14 @@ docker run \
   <image>
 ```
 
+Note: the debugger (`debugger.py`/`gdb_session.py`) needs gdb to `ptrace` the
+compiled binary it launches. Tracing a direct child is normally allowed
+without any special capability (no `CAP_SYS_PTRACE` needed for that specific
+case on a default Yama `ptrace_scope`), but this hasn't been verified inside
+an actual hardened container running the flags above -- no Docker daemon was
+available to test against in this dev environment. If debugging breaks under
+a locked-down container, this is where to look first.
+
 Per the spec's own architecture (section 29), each compile/run request
 should ideally be dispatched to a short-lived container or a worker pool
 of pre-warmed containers behind a queue, rather than executing directly

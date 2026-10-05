@@ -59,12 +59,16 @@ def _parse_diagnostics(compiler_output: str) -> tuple[list[CompileDiagnostic], l
     return errors, warnings
 
 
-def compile_in_workspace(workspace: Path, source_code: str, c_standard: str) -> tuple[CompileResponse, Path]:
+def compile_in_workspace(
+    workspace: Path, source_code: str, c_standard: str, debug: bool = False
+) -> tuple[CompileResponse, Path]:
     """Compile main.c inside an already-created workspace.
 
     Leaves the workspace and any produced binary on disk -- the caller owns
-    cleanup. Used directly by compile-only requests, and by the run flow
-    which needs the binary to still exist afterwards.
+    cleanup. Used directly by compile-only requests, by the run flow which
+    needs the binary to still exist afterwards, and (with debug=True, which
+    adds -g and disables optimization so breakpoints/variables map onto the
+    source the student actually wrote) by the debug flow.
     """
     source_path = workspace / "main.c"
     source_path.write_text(source_code)
@@ -81,6 +85,7 @@ def compile_in_workspace(workspace: Path, source_code: str, c_standard: str) -> 
                 f"-std={std_flag}",
                 "-Wall",
                 "-Wextra",
+                *(["-g", "-O0"] if debug else []),
                 "-I",
                 str(_COMPAT_INCLUDE_DIR),
                 "-include",

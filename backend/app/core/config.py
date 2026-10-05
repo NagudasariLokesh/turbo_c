@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 # Render's native (non-Docker) Python runtime ships gcc/g++ pre-installed
 # (Debian 12 "bookworm") but has no way to install additional packages like
@@ -9,6 +10,21 @@ import os
 COMPILER_BINARY = os.environ.get("COMPILER_BINARY", "gcc")
 COMPILE_TIMEOUT_SECONDS = 10
 MAX_SOURCE_BYTES = 200_000
+
+# No real gdb exists on Render's native runtime, and there's no way to
+# install one there (no root, no apt access -- see COMPILER_BINARY above
+# for the same constraint). The build command instead fetches a real gdb
+# from conda-forge via micromamba (a static binary, no root needed) into
+# this fixed path -- see render build command / README.md. Overridable for
+# local dev (e.g. a system gdb, or the scratch one used during development).
+GDB_BINARY = os.environ.get(
+    "GDB_BINARY",
+    str(Path(__file__).resolve().parent.parent.parent / "vendor" / "gdb-env" / "bin" / "gdb"),
+)
+# Debug sessions can legitimately sit stopped at a breakpoint indefinitely
+# (the whole point) -- same max-lifetime/concurrency shape as interactive
+# run sessions, reusing those same limits (see session_limits.py).
+DEBUG_EXEC_WRAPPER = str(Path(__file__).resolve().parent.parent / "debug_exec_wrapper.sh")
 
 # Execution limits. These are enforced via POSIX rlimits on the child
 # process -- the best isolation available without Docker/root in this

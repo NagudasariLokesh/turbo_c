@@ -28,6 +28,11 @@ services:
       # since the Render native-runtime switch) -- without this, every
       # compile would fail with "gcc: not found".
       COMPILER_BINARY: clang
+      # sandbox/Dockerfile apt-installs gdb onto PATH as plain `gdb` --
+      # core/config.py's default GDB_BINARY instead points at the
+      # Render-specific conda-forge/micromamba install path, which doesn't
+      # exist in this image.
+      GDB_BINARY: gdb
 
   frontend:
     build:

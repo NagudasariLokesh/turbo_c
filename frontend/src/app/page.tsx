@@ -8,7 +8,9 @@ import StatusBar from "@/components/StatusBar";
 import FileTabs from "@/components/tabs/FileTabs";
 import UnsavedChangesDialog from "@/components/dialogs/UnsavedChangesDialog";
 import TerminalScreen from "@/components/terminal/TerminalScreen";
-import { RunStatus } from "@/types/ide";
+import DebugScreen, { DebugScreenHandle } from "@/components/debug/DebugScreen";
+import { MENUS } from "@/components/menu/menuData";
+import { Menu, RunStatus } from "@/types/ide";
 import { compileSource, CompileDiagnostic, CStandard } from "@/lib/api";
 import { pickAndOpenFile, pickAndSaveFile, saveToHandle } from "@/lib/localFiles";
 
@@ -44,6 +46,16 @@ interface RunSession {
   filename: string;
 }
 
+interface DebugSession {
+  key: number;
+  source: string;
+  standard: CStandard;
+  filename: string;
+  breakpoints: number[];
+}
+
+type DebugPhase = "connecting" | "running" | "stopped" | "exited";
+
 function makeTab(overrides: Partial<Tab> = {}): Tab {
   return {
     id: crypto.randomUUID(),
@@ -57,7 +69,6 @@ function makeTab(overrides: Partial<Tab> = {}): Tab {
 
 const NOT_YET_IMPLEMENTED: Record<string, string> = {
   Stop: "Close the black output screen (press any key) to stop the running program.",
-  "Start Debugging": "Debugging is not implemented yet.",
   "Editor Settings": "Options are not implemented yet.",
   "Font Size": "Options are not implemented yet.",
   Theme: "Options are not implemented yet.",
@@ -85,8 +96,13 @@ export default function Home() {
   const [warnings, setWarnings] = useState<CompileDiagnostic[]>([]);
   const [pendingCloseTabId, setPendingCloseTabId] = useState<string | null>(null);
   const [runSession, setRunSession] = useState<RunSession | null>(null);
+  const [breakpointsByTab, setBreakpointsByTab] = useState<Record<string, number[]>>({});
+  const [debugSession, setDebugSession] = useState<DebugSession | null>(null);
+  const [debugPhase, setDebugPhase] = useState<DebugPhase | null>(null);
+  const [currentDebugLine, setCurrentDebugLine] = useState<number | null>(null);
 
   const editorRef = useRef<EditorPaneHandle>(null);
+  const debugScreenRef = useRef<DebugScreenHandle>(null);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
 
@@ -140,6 +156,42 @@ export default function Home() {
       filename: activeTab.filename,
     });
   }, [activeTab.content, activeTab.filename, cStandard]);
+
+  const handleToggleBreakpoint = useCallback(
+    (line: number) => {
+      setBreakpointsByTab((prev) => {
+        const current = prev[activeTabId] ?? [];
+        const next = current.includes(line)
+          ? current.filter((l) => l !== line)
+          : [...current, line].sort((a, b) => a - b);
+        return { ...prev, [activeTabId]: next };
+      });
+    },
+    [activeTabId]
+  );
+
+  const handleStartDebugging = useCallback(() => {
+    runSessionCounter += 1;
+    setStatus("running");
+    setErrors([]);
+    setWarnings([]);
+    setCurrentDebugLine(null);
+    setDebugSession({
+      key: runSessionCounter,
+      source: activeTab.content,
+      standard: cStandard,
+      filename: activeTab.filename,
+      breakpoints: breakpointsByTab[activeTabId] ?? [],
+    });
+  }, [activeTab.content, activeTab.filename, activeTabId, breakpointsByTab, cStandard]);
+
+  const handleDebugStopped = useCallback((line: number | null) => {
+    setCurrentDebugLine(line);
+  }, []);
+
+  const handleDebugExit = useCallback((exitCode: number | null) => {
+    setStatus(exitCode === 0 ? "done" : "error");
+  }, []);
 
   const handleTerminalCompileError = useCallback(
     (errs: CompileDiagnostic[], warns: CompileDiagnostic[], compilerOutput: string) => {
@@ -345,6 +397,21 @@ export default function Home() {
         return;
       }
 
+      if (menuLabel === "Debug") {
+        switch (itemLabel) {
+          case "Start Debugging":
+            return handleStartDebugging();
+          case "Continue":
+            return debugScreenRef.current?.continue();
+          case "Step Over":
+            return debugScreenRef.current?.stepOver();
+          case "Step Into":
+            return debugScreenRef.current?.stepInto();
+          case "Stop Debugging":
+            return debugScreenRef.current?.stop();
+        }
+      }
+
       const message = NOT_YET_IMPLEMENTED[itemLabel];
       setOutputLines((prev) => [...prev, message ?? `${itemLabel} is not implemented yet.`]);
     },
@@ -357,8 +424,26 @@ export default function Home() {
       handleCloseRequest,
       handleCompile,
       handleRun,
+      handleStartDebugging,
     ]
   );
+
+  const menus: Menu[] = MENUS.map((menu) => {
+    if (menu.label !== "Debug") return menu;
+    return {
+      ...menu,
+      items: menu.items.map((item) => {
+        if (item.label === "Start Debugging") {
+          return { ...item, disabled: debugSession !== null };
+        }
+        if (item.label === "Stop Debugging") {
+          return { ...item, disabled: debugSession === null };
+        }
+        // Continue / Step Over / Step Into
+        return { ...item, disabled: debugPhase !== "stopped" };
+      }),
+    };
+  });
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -382,7 +467,7 @@ export default function Home() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#0000aa]">
-      <MenuBar onAction={handleMenuAction} />
+      <MenuBar onAction={handleMenuAction} menus={menus} />
 
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-black/40 bg-[#000088] px-2">
         <button
@@ -436,6 +521,9 @@ export default function Home() {
         }}
         errors={errors}
         warnings={warnings}
+        breakpoints={breakpointsByTab[activeTabId] ?? []}
+        onToggleBreakpoint={handleToggleBreakpoint}
+        currentDebugLine={currentDebugLine}
       />
 
       <OutputPanel lines={outputLines} onClear={() => setOutputLines([])} />
@@ -457,6 +545,26 @@ export default function Home() {
           onCompileError={handleTerminalCompileError}
           onExit={handleTerminalExit}
           onClose={() => setRunSession(null)}
+        />
+      )}
+
+      {debugSession && (
+        <DebugScreen
+          ref={debugScreenRef}
+          key={debugSession.key}
+          sourceCode={debugSession.source}
+          cStandard={debugSession.standard}
+          filename={debugSession.filename}
+          breakpoints={debugSession.breakpoints}
+          onCompileError={handleTerminalCompileError}
+          onStopped={handleDebugStopped}
+          onPhaseChange={setDebugPhase}
+          onExit={handleDebugExit}
+          onClose={() => {
+            setDebugSession(null);
+            setDebugPhase(null);
+            setCurrentDebugLine(null);
+          }}
         />
       )}
 

@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import shutil
-import signal
 import tempfile
 from pathlib import Path
 
@@ -15,33 +14,10 @@ from app.core.config import (
     SESSION_MAX_DURATION_SECONDS,
 )
 from app.services.compiler_service import compile_in_workspace
-from app.services.pty_session import PtySession
+from app.services.gdb_session import GdbError, GdbSession, exit_code_from_stopped
 from app.services.session_limits import acquire_slot, release_slot
 
 router = APIRouter(prefix="/api/compiler", tags=["compiler"])
-
-
-def _blocking_waitpid(pid: int) -> int | None:
-    """Runs in a worker thread -- os.waitpid blocks the whole thread until
-    the child exits, which would freeze the event loop if called directly."""
-    try:
-        _, status = os.waitpid(pid, 0)
-    except ChildProcessError:
-        return None
-    if os.WIFEXITED(status):
-        return os.WEXITSTATUS(status)
-    if os.WIFSIGNALED(status):
-        return -os.WTERMSIG(status)
-    return None
-
-
-def _kill(pid: int | None) -> None:
-    if pid is None:
-        return
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
 
 
 async def _safe_send_json(websocket: WebSocket, payload: dict) -> None:
@@ -51,8 +27,8 @@ async def _safe_send_json(websocket: WebSocket, payload: dict) -> None:
         pass  # socket already closed (e.g. client disconnected)
 
 
-@router.websocket("/run-ws")
-async def run_interactive(websocket: WebSocket) -> None:
+@router.websocket("/debug-ws")
+async def run_debug(websocket: WebSocket) -> None:
     await websocket.accept()
     client_key = websocket.client.host if websocket.client else "unknown"
 
@@ -64,6 +40,10 @@ async def run_interactive(websocket: WebSocket) -> None:
 
     source_code = init.get("source_code")
     c_standard = init.get("c_standard", "c11")
+    filename = init.get("filename") or "main.c"
+    raw_breakpoints = init.get("breakpoints", [])
+    breakpoints = [int(line) for line in raw_breakpoints if isinstance(line, (int, float, str))]
+
     if not isinstance(source_code, str) or not source_code:
         await _safe_send_json(websocket, {"type": "error", "message": "source_code is required."})
         await websocket.close()
@@ -80,18 +60,20 @@ async def run_interactive(websocket: WebSocket) -> None:
             websocket,
             {
                 "type": "error",
-                "message": "Too many concurrent runs from this connection. Close another running tab first.",
+                "message": "Too many concurrent sessions from this connection. Close another running or debugging tab first.",
             },
         )
         await websocket.close()
         return
 
-    workspace = Path(tempfile.mkdtemp(prefix="c-interactive-"))
-    session: PtySession | None = None
+    workspace = Path(tempfile.mkdtemp(prefix="c-debug-"))
+    session: GdbSession | None = None
     loop = asyncio.get_event_loop()
 
     try:
-        compile_response, binary_path = compile_in_workspace(workspace, source_code, c_standard)
+        compile_response, binary_path = compile_in_workspace(
+            workspace, source_code, c_standard, debug=True
+        )
         if not compile_response.success:
             await _safe_send_json(
                 websocket,
@@ -104,11 +86,15 @@ async def run_interactive(websocket: WebSocket) -> None:
             )
             return
 
-        await _safe_send_json(websocket, {"type": "started"})
-
-        session = PtySession(workspace, binary_path)
-        master_fd = session.start()
+        session = GdbSession(workspace, binary_path, filename=filename)
+        master_fd = await session.start()
         os.set_blocking(master_fd, False)
+
+        try:
+            await session.set_breakpoints(breakpoints)
+        except GdbError as exc:
+            await _safe_send_json(websocket, {"type": "error", "message": str(exc)})
+            return
 
         output_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
@@ -116,8 +102,6 @@ async def run_interactive(websocket: WebSocket) -> None:
             try:
                 data = os.read(master_fd, 65536)
             except OSError:
-                # EIO is how Linux signals "the slave side is gone" on a PTY
-                # (unlike a pipe, which would just read as empty instead).
                 data = b""
             if data:
                 output_queue.put_nowait(data)
@@ -141,51 +125,106 @@ async def run_interactive(websocket: WebSocket) -> None:
                     await websocket.send_bytes(
                         b"\r\n[output limit exceeded -- program terminated]\r\n"
                     )
-                    _kill(session.pid if session else None)
+                    assert session is not None
+                    session.kill_inferior()
                     return
                 await websocket.send_bytes(chunk)
 
+        async def watch_events() -> int | None:
+            """Consumes gdb's async *stopped notifications. Returns the
+            exit code once the debuggee actually terminates (normal exit,
+            explicit exit code, or an unhandled signal killing it); keeps
+            looping (reporting each pause to the client) for every
+            breakpoint/step/signal stop along the way, since those leave
+            the debuggee still alive and waiting."""
+            assert session is not None
+            while True:
+                event = await session.events.get()
+                if event.get("message") != "stopped":
+                    continue
+                payload = event.get("payload") or {}
+                code = exit_code_from_stopped(payload)
+                if code is not None:
+                    return code
+                frame = payload.get("frame") or {}
+                try:
+                    variables = await session.list_variables()
+                except GdbError:
+                    variables = []
+                line = frame.get("line")
+                await _safe_send_json(
+                    websocket,
+                    {
+                        "type": "stopped",
+                        "reason": payload.get("reason"),
+                        "line": int(line) if line is not None else None,
+                        "signal_name": payload.get("signal-name"),
+                        "variables": variables,
+                    },
+                )
+
         async def pump_input() -> None:
+            assert session is not None
             while True:
                 message = await websocket.receive()
                 if message.get("type") == "websocket.disconnect":
                     return
                 data = message.get("bytes")
                 if data:
-                    assert session is not None
-                    session.write(data[:MAX_STDIN_CHUNK_BYTES])
+                    session.write_stdin(data[:MAX_STDIN_CHUNK_BYTES])
                     continue
                 text = message.get("text")
-                if text:
-                    try:
-                        control = json.loads(text)
-                    except ValueError:
-                        continue
-                    if control.get("type") == "resize" and session is not None:
+                if not text:
+                    continue
+                try:
+                    control = json.loads(text)
+                except ValueError:
+                    continue
+                ctype = control.get("type")
+                try:
+                    if ctype == "resize":
                         session.resize(int(control.get("rows", 24)), int(control.get("cols", 80)))
+                    elif ctype == "continue":
+                        await session.cont()
+                    elif ctype == "step_over":
+                        await session.step_over()
+                    elif ctype == "step_into":
+                        await session.step_into()
+                    elif ctype == "stop":
+                        return
+                except GdbError:
+                    # Most likely: the debuggee already exited and the
+                    # client's button-disable state just hadn't caught up
+                    # yet. Nothing to do -- the exit event is already on
+                    # its way via watch_events.
+                    pass
 
         output_task = asyncio.create_task(pump_output())
         input_task = asyncio.create_task(pump_input())
-        # run_in_executor already returns an awaitable Future -- wrapping it
-        # in create_task() would fail since that expects a coroutine.
-        exit_task = loop.run_in_executor(None, _blocking_waitpid, session.pid)
+        events_task = asyncio.create_task(watch_events())
+
+        await _safe_send_json(websocket, {"type": "started"})
+        await session.run()
 
         done, _pending = await asyncio.wait(
-            {exit_task, input_task},
+            {events_task, input_task},
             timeout=SESSION_MAX_DURATION_SECONDS,
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        if exit_task not in done:
-            # Either the session timed out, or the client disconnected
-            # before the program finished -- either way, nothing is going
-            # to read further input, so stop the program.
-            _kill(session.pid)
-            exit_code = await exit_task
+        if events_task in done:
+            exit_code = events_task.result()
         else:
-            exit_code = exit_task.result()
+            # Either the session timed out, or the client disconnected /
+            # asked to stop before the program finished -- either way,
+            # nothing is going to drive it further, so kill it.
+            session.kill_inferior()
+            try:
+                exit_code = await asyncio.wait_for(events_task, timeout=2)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                exit_code = None
+                events_task.cancel()
 
-        # Let any already-buffered output drain before announcing exit.
         try:
             await asyncio.wait_for(output_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -197,11 +236,11 @@ async def run_interactive(websocket: WebSocket) -> None:
         await _safe_send_json(websocket, {"type": "exit", "exit_code": exit_code})
     except WebSocketDisconnect:
         if session is not None:
-            _kill(session.pid)
+            session.kill_inferior()
     finally:
         release_slot(client_key)
         if session is not None:
-            session.close()
+            await session.close()
         shutil.rmtree(workspace, ignore_errors=True)
         try:
             await websocket.close()

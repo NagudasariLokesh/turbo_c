@@ -52,11 +52,11 @@ export const MENUS: Menu[] = [
   {
     label: "Debug",
     items: [
-      { label: "Start Debugging", disabled: true },
-      { label: "Continue", disabled: true },
-      { label: "Step Over", disabled: true },
-      { label: "Step Into", disabled: true },
-      { label: "Stop Debugging", disabled: true },
+      { label: "Start Debugging" },
+      { label: "Continue" },
+      { label: "Step Over" },
+      { label: "Step Into" },
+      { label: "Stop Debugging" },
     ],
   },
   {

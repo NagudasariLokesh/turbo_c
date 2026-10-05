@@ -26,15 +26,29 @@ interface EditorPaneProps {
   onCursorChange: (line: number, column: number) => void;
   errors: CompileDiagnostic[];
   warnings: CompileDiagnostic[];
+  breakpoints: number[];
+  onToggleBreakpoint: (line: number) => void;
+  currentDebugLine: number | null;
 }
 
 const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
   function EditorPane(
-    { activeTabId, initialContent, onChange, onCursorChange, errors, warnings },
+    {
+      activeTabId,
+      initialContent,
+      onChange,
+      onCursorChange,
+      errors,
+      warnings,
+      breakpoints,
+      onToggleBreakpoint,
+      currentDebugLine,
+    },
     ref
   ) {
     const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
     const monacoRef = useRef<typeof Monaco | null>(null);
+    const debugDecorationsRef = useRef<string[]>([]);
     // onMount only fires once per EditorPane instance, but `path` swaps the
     // underlying model on every tab switch without remounting -- routing
     // through a ref (kept fresh below) instead of closing over the prop
@@ -42,6 +56,8 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     // identity changes.
     const onCursorChangeRef = useRef(onCursorChange);
     onCursorChangeRef.current = onCursorChange;
+    const onToggleBreakpointRef = useRef(onToggleBreakpoint);
+    onToggleBreakpointRef.current = onToggleBreakpoint;
 
     useImperativeHandle(ref, () => {
       const run = (actionId: string) => {
@@ -101,6 +117,16 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
         const position = editorInstance.getPosition();
         onCursorChangeRef.current(position?.lineNumber ?? 1, position?.column ?? 1);
       });
+
+      editorInstance.onMouseDown((e) => {
+        const isGutterClick =
+          e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN ||
+          e.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS;
+        const line = e.target.position?.lineNumber;
+        if (isGutterClick && line != null) {
+          onToggleBreakpointRef.current(line);
+        }
+      });
     };
 
     useEffect(() => {
@@ -127,6 +153,38 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
         ...warnings.map((d) => toMarker(d, monaco.MarkerSeverity.Warning)),
       ]);
     }, [errors, warnings]);
+
+    useEffect(() => {
+      const monaco = monacoRef.current;
+      const editorInstance = editorRef.current;
+      if (!monaco || !editorInstance) return;
+
+      const breakpointDecorations: Monaco.editor.IModelDeltaDecoration[] = breakpoints.map(
+        (line) => ({
+          range: new monaco.Range(line, 1, line, 1),
+          options: { glyphMarginClassName: "breakpoint-glyph" },
+        })
+      );
+
+      const currentLineDecoration: Monaco.editor.IModelDeltaDecoration[] =
+        currentDebugLine != null
+          ? [
+              {
+                range: new monaco.Range(currentDebugLine, 1, currentDebugLine, 1),
+                options: {
+                  isWholeLine: true,
+                  className: "debug-current-line",
+                  glyphMarginClassName: "debug-current-line-glyph",
+                },
+              },
+            ]
+          : [];
+
+      debugDecorationsRef.current = editorInstance.deltaDecorations(debugDecorationsRef.current, [
+        ...breakpointDecorations,
+        ...currentLineDecoration,
+      ]);
+    }, [breakpoints, currentDebugLine, activeTabId]);
 
     return (
       <div className="flex flex-1 overflow-hidden bg-[#0000aa]">
@@ -167,6 +225,7 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
             fontFamily:
               "var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace",
             fontSize: 15,
+            glyphMargin: true,
             minimap: { enabled: false },
             automaticLayout: true,
             tabSize: 4,

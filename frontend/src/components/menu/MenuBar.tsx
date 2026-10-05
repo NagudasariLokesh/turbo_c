@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MENUS } from "./menuData";
+import { Menu } from "@/types/ide";
 
 interface MenuBarProps {
   onAction: (menuLabel: string, itemLabel: string) => void;
+  menus?: Menu[];
 }
 
-export default function MenuBar({ onAction }: MenuBarProps) {
+export default function MenuBar({ onAction, menus = MENUS }: MenuBarProps) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -33,7 +35,7 @@ export default function MenuBar({ onAction }: MenuBarProps) {
       ref={barRef}
       className="relative flex h-7 shrink-0 select-none items-stretch bg-[#c0c0c0] text-sm text-black"
     >
-      {MENUS.map((menu, i) => (
+      {menus.map((menu, i) => (
         <div key={menu.label} className="relative">
           <button
             className={`h-full px-3 outline-none ${

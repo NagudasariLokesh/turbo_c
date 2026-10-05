@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { API_BASE_URL, CompileDiagnostic, CStandard } from "@/lib/api";
+import { CompileDiagnostic, CStandard, wsUrlFor } from "@/lib/api";
 
 interface TerminalScreenProps {
   sourceCode: string;
@@ -17,18 +17,6 @@ interface TerminalScreenProps {
     compilerOutput: string
   ) => void;
   onExit?: (exitCode: number | null) => void;
-}
-
-function wsUrlFor(path: string): string {
-  // In the single-service deployment, NEXT_PUBLIC_API_BASE_URL is baked in
-  // as "" at build time so fetch() calls resolve as same-origin relative
-  // paths -- but the WebSocket constructor does NOT auto-convert a relative
-  // http(s) URL to ws(s); it resolves relative to the page's http(s) scheme
-  // and then rejects it for not being ws/wss. So an empty base falls back
-  // to the current page's origin, built explicitly with the ws(s) scheme.
-  const base =
-    API_BASE_URL || (typeof window !== "undefined" ? window.location.origin : "");
-  return base.replace(/^http/, "ws") + path;
 }
 
 export default function TerminalScreen({
