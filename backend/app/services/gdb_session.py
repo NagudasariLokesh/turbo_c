@@ -222,8 +222,14 @@ def exit_code_from_stopped(payload: dict) -> int | None:
     """Translates a *stopped notification's payload into an exit code using
     the same convention as the plain (non-debug) run path: 0+ for a normal
     exit, negative for death-by-signal (-signal number). Returns None if
-    this *stopped event isn't a terminal one (e.g. a breakpoint/step pause
-    -- the program is still running)."""
+    this *stopped event isn't a terminal one -- which includes
+    "signal-received" (e.g. SIGSEGV): confirmed empirically that this is
+    gdb *pausing* the still-alive process at the fault, same as a
+    breakpoint, not the process actually dying yet. It only actually dies
+    (reason "exited-signalled") if the student then Continues past it,
+    letting the signal be redelivered -- same two-step real gdb gives you
+    at a CLI, so the student gets a chance to inspect the crash site
+    first instead of just being told "it crashed"."""
     reason = payload.get("reason")
     if reason == "exited-normally":
         return 0
@@ -231,7 +237,7 @@ def exit_code_from_stopped(payload: dict) -> int | None:
         # Octal, not decimal -- confirmed empirically (`return 42;` reports
         # exit-code="052"), a quirk inherited from GDB's CLI message text.
         return int(payload.get("exit-code", "0"), 8)
-    if reason == "signal-received":
+    if reason == "exited-signalled":
         signal_name = payload.get("signal-name", "")
         return -_SIGNAL_NAME_TO_NUMBER.get(signal_name, 0)
     return None
