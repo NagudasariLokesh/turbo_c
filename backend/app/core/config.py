@@ -11,6 +11,21 @@ COMPILER_BINARY = os.environ.get("COMPILER_BINARY", "gcc")
 COMPILE_TIMEOUT_SECONDS = 10
 MAX_SOURCE_BYTES = 200_000
 
+# The production deployment is same-origin (FastAPI serves the built
+# frontend directly -- see main.py), so this is never actually exercised
+# there; a same-origin fetch() never triggers a browser's CORS check
+# regardless of server headers. Local dev is NOT same-origin though --
+# `next dev` runs on :3000, this API on :8000 -- so fetch()-based calls
+# (compile; the run-ws/debug-ws WebSockets aren't affected, browsers don't
+# apply CORS preflight to WebSocket upgrades) fail there without this.
+# Confirmed via an actual browser: Compile returned a CORS error locally
+# while Run/Debug worked, since only one of those goes through fetch().
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
+
 # No real gdb exists on Render's native runtime, and there's no way to
 # install one there (no root, no apt access -- see COMPILER_BINARY above
 # for the same constraint). The build command instead fetches a real gdb

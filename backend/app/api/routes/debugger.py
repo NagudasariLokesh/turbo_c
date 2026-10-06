@@ -20,9 +20,10 @@ from app.services.session_limits import acquire_slot, release_slot
 router = APIRouter(prefix="/api/compiler", tags=["compiler"])
 
 
-async def _safe_send_json(websocket: WebSocket, payload: dict) -> None:
+async def _safe_send_json(websocket: WebSocket, payload: dict, lock: asyncio.Lock) -> None:
     try:
-        await websocket.send_json(payload)
+        async with lock:
+            await websocket.send_json(payload)
     except RuntimeError:
         pass  # socket already closed (e.g. client disconnected)
 
@@ -44,13 +45,23 @@ async def run_debug(websocket: WebSocket) -> None:
     raw_breakpoints = init.get("breakpoints", [])
     breakpoints = [int(line) for line in raw_breakpoints if isinstance(line, (int, float, str))]
 
+    # ASGI/Starlette's WebSocket.send() is not safe to call concurrently from
+    # multiple tasks (confirmed against uvicorn's implementation: there's a
+    # real `await` -- backpressure wait -- before each frame is written, so
+    # two concurrent sends can interleave and corrupt/drop a frame). This
+    # session has three independent senders (pump_output's PTY bytes,
+    # watch_events's "stopped" events, and this handler's own
+    # started/exit) racing on the same socket, so every send -- including
+    # the early-exit ones below -- goes through one lock.
+    send_lock = asyncio.Lock()
+
     if not isinstance(source_code, str) or not source_code:
-        await _safe_send_json(websocket, {"type": "error", "message": "source_code is required."})
+        await _safe_send_json(websocket, {"type": "error", "message": "source_code is required."}, send_lock)
         await websocket.close()
         return
     if len(source_code.encode("utf-8")) > MAX_SOURCE_BYTES:
         await _safe_send_json(
-            websocket, {"type": "error", "message": "Source code exceeds the maximum allowed size."}
+            websocket, {"type": "error", "message": "Source code exceeds the maximum allowed size."}, send_lock
         )
         await websocket.close()
         return
@@ -62,6 +73,7 @@ async def run_debug(websocket: WebSocket) -> None:
                 "type": "error",
                 "message": "Too many concurrent sessions from this connection. Close another running or debugging tab first.",
             },
+            send_lock,
         )
         await websocket.close()
         return
@@ -83,6 +95,7 @@ async def run_debug(websocket: WebSocket) -> None:
                     "errors": [e.model_dump() for e in compile_response.errors],
                     "warnings": [w.model_dump() for w in compile_response.warnings],
                 },
+                send_lock,
             )
             return
 
@@ -93,7 +106,7 @@ async def run_debug(websocket: WebSocket) -> None:
         try:
             await session.set_breakpoints(breakpoints)
         except GdbError as exc:
-            await _safe_send_json(websocket, {"type": "error", "message": str(exc)})
+            await _safe_send_json(websocket, {"type": "error", "message": str(exc)}, send_lock)
             return
 
         output_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -122,13 +135,15 @@ async def run_debug(websocket: WebSocket) -> None:
                     return
                 total += len(chunk)
                 if total > MAX_OUTPUT_BYTES:
-                    await websocket.send_bytes(
-                        b"\r\n[output limit exceeded -- program terminated]\r\n"
-                    )
+                    async with send_lock:
+                        await websocket.send_bytes(
+                            b"\r\n[output limit exceeded -- program terminated]\r\n"
+                        )
                     assert session is not None
                     session.kill_inferior()
                     return
-                await websocket.send_bytes(chunk)
+                async with send_lock:
+                    await websocket.send_bytes(chunk)
 
         async def watch_events() -> int | None:
             """Consumes gdb's async *stopped notifications. Returns the
@@ -161,6 +176,7 @@ async def run_debug(websocket: WebSocket) -> None:
                         "signal_name": payload.get("signal-name"),
                         "variables": variables,
                     },
+                    send_lock,
                 )
 
         async def pump_input() -> None:
@@ -203,7 +219,7 @@ async def run_debug(websocket: WebSocket) -> None:
         input_task = asyncio.create_task(pump_input())
         events_task = asyncio.create_task(watch_events())
 
-        await _safe_send_json(websocket, {"type": "started"})
+        await _safe_send_json(websocket, {"type": "started"}, send_lock)
         await session.run()
 
         done, _pending = await asyncio.wait(
@@ -233,16 +249,30 @@ async def run_debug(websocket: WebSocket) -> None:
         if not input_task.done():
             input_task.cancel()
 
-        await _safe_send_json(websocket, {"type": "exit", "exit_code": exit_code})
+        await _safe_send_json(websocket, {"type": "exit", "exit_code": exit_code}, send_lock)
     except WebSocketDisconnect:
         if session is not None:
             session.kill_inferior()
     finally:
         release_slot(client_key)
+        if session is not None and session.inferior_master_fd is not None:
+            # Must happen before session.close() closes the fd -- closing a
+            # fd that's still registered with the event loop's selector
+            # (epoll/kqueue) can corrupt its internal state for *other*
+            # connections too, since the selector is one shared,
+            # per-process object, not per-connection. PTY fd numbers get
+            # reused across sessions (confirmed: the same number recurs),
+            # so a leaked registration here doesn't just affect this
+            # session -- it can surface as the next session's `on_readable`
+            # silently misbehaving, or event-loop-wide I/O flakiness.
+            try:
+                loop.remove_reader(session.inferior_master_fd)
+            except (ValueError, OSError):
+                pass
         if session is not None:
             await session.close()
         shutil.rmtree(workspace, ignore_errors=True)
         try:
             await websocket.close()
-        except RuntimeError:
+        except (RuntimeError, WebSocketDisconnect):
             pass

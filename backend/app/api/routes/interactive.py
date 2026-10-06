@@ -200,10 +200,22 @@ async def run_interactive(websocket: WebSocket) -> None:
             _kill(session.pid)
     finally:
         release_slot(client_key)
+        if session is not None and session.master_fd is not None:
+            # Must happen before session.close() closes the fd -- closing a
+            # fd still registered with the event loop's selector can
+            # corrupt its state for *other* connections too (the selector
+            # is one shared, per-process object). The EOF branch in
+            # on_readable() above usually removes this already, but not
+            # every exit path reaches it (timeout, client disconnect,
+            # output-limit kill), so it's covered here unconditionally too.
+            try:
+                loop.remove_reader(session.master_fd)
+            except (ValueError, OSError):
+                pass
         if session is not None:
             session.close()
         shutil.rmtree(workspace, ignore_errors=True)
         try:
             await websocket.close()
-        except RuntimeError:
+        except (RuntimeError, WebSocketDisconnect):
             pass

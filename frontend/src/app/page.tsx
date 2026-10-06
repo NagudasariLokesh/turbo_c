@@ -135,6 +135,7 @@ export default function Home() {
     setStatus("running");
     setErrors([]);
     setWarnings([]);
+    setOutputLines([]);
     setRunSession({
       key: runSessionCounter,
       source: activeTab.content,
@@ -161,6 +162,7 @@ export default function Home() {
     setStatus("running");
     setErrors([]);
     setWarnings([]);
+    setOutputLines([]);
     setCurrentDebugLine(null);
     setDebugSession({
       key: runSessionCounter,
@@ -515,7 +517,15 @@ export default function Home() {
         currentDebugLine={currentDebugLine}
       />
 
-      <OutputPanel lines={outputLines} onClear={() => setOutputLines([])} />
+      <OutputPanel
+        lines={outputLines}
+        onClear={() => {
+          setOutputLines([]);
+          setStatus("idle");
+          setErrors([]);
+          setWarnings([]);
+        }}
+      />
 
       <StatusBar
         status={status}
